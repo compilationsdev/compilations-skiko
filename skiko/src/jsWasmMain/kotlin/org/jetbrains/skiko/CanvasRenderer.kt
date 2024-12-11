@@ -78,7 +78,7 @@ internal abstract class CanvasRenderer(
             redrawScheduled = false
             makeGLContextCurrent(contextPointer)
             // `clear` and `resetMatrix` make canvas not accumulate previous effects
-            canvas?.clear(Color.WHITE)
+            canvas?.clear(Color.TRANSPARENT)
             canvas?.resetMatrix()
             drawFrame(timestamp)
             surface?.flushAndSubmit()
