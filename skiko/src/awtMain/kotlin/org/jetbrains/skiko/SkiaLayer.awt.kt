@@ -8,6 +8,7 @@ import org.jetbrains.skiko.redrawer.Redrawer
 import org.jetbrains.skiko.redrawer.RedrawerManager
 import java.awt.Color
 import java.awt.Component
+import java.awt.Point
 import java.awt.event.*
 import java.awt.geom.AffineTransform
 import java.awt.im.InputMethodRequests
@@ -20,7 +21,6 @@ import javax.swing.SwingUtilities.isEventDispatchThread
 import javax.swing.UIManager
 import javax.swing.event.AncestorEvent
 import javax.swing.event.AncestorListener
-import kotlin.math.ceil
 import kotlin.math.floor
 
 actual open class SkiaLayer internal constructor(
@@ -138,12 +138,34 @@ actual open class SkiaLayer internal constructor(
         add(backedLayer)
 
         addAncestorListener(object : AncestorListener {
-            override fun ancestorAdded(event: AncestorEvent?) = Unit
 
-            override fun ancestorRemoved(event: AncestorEvent?) = Unit
+            private var positionInWindow: Point? = null
+
+            private val zeroPoint = Point(0, 0)
+
+            private fun computePositionInWindow(): Point? {
+                val window = SwingUtilities.getWindowAncestor(this@SkiaLayer)
+                return if (window == null) {
+                    null
+                } else {
+                    SwingUtilities.convertPoint(this@SkiaLayer, zeroPoint, window)
+                }
+            }
+
+            override fun ancestorAdded(event: AncestorEvent?) {
+                positionInWindow = computePositionInWindow()
+            }
+
+            override fun ancestorRemoved(event: AncestorEvent?) {
+                positionInWindow = null
+            }
 
             override fun ancestorMoved(event: AncestorEvent?) {
-                revalidate()
+                val newPosition = computePositionInWindow()
+                if ((positionInWindow != null) && (positionInWindow != newPosition)) {
+                    revalidate()
+                }
+                positionInWindow = newPosition
             }
         })
 
@@ -189,7 +211,6 @@ actual open class SkiaLayer internal constructor(
         checkShowing()
         init(isInited)
     }
-
 
     actual fun detach() {
         dispose()
@@ -263,22 +284,22 @@ actual open class SkiaLayer internal constructor(
     @Volatile
     private var isDisposed = false
 
-    private val redrawerManager = RedrawerManager<Redrawer>(properties.renderApi) { renderApi, oldRedrawer ->
-        oldRedrawer?.dispose()
-        val newRedrawer = renderFactory.createRedrawer(this, renderApi, analytics, properties)
-        newRedrawer.syncBounds()
-        newRedrawer
-    }
-
-    internal val redrawer: Redrawer?
-        get() = redrawerManager.redrawer
-
-    actual var renderApi: GraphicsApi
-        get() = redrawerManager.renderApi
-        set(value) {
-            redrawerManager.forceRenderApi(value)
+    private val redrawerManager = RedrawerManager<Redrawer>(
+        defaultRenderApi = properties.renderApi,
+        redrawerFactory = { renderApi, oldRedrawer ->
+            oldRedrawer?.dispose()
+            renderFactory.createRedrawer(this, renderApi, analytics, properties).also {
+                it.syncBounds()
+            }
+        },
+        onRenderApiChanged = {
             notifyChange(PropertyKind.Renderer)
         }
+    )
+
+    internal val redrawer: Redrawer? by redrawerManager::redrawer
+
+    actual var renderApi: GraphicsApi by redrawerManager::renderApi
 
     val renderInfo: String
         get() = if (redrawer == null)
@@ -299,15 +320,15 @@ actual open class SkiaLayer internal constructor(
         isInited = true
     }
 
-    private val stateHandlers =
+    private val stateChangeListeners =
         mutableMapOf<PropertyKind, MutableList<(SkiaLayer) -> Unit>>()
 
     fun onStateChanged(kind: PropertyKind, handler: (SkiaLayer) -> Unit) {
-        stateHandlers.getOrPut(kind, { mutableListOf() }) += handler
+        stateChangeListeners.getOrPut(kind, ::mutableListOf) += handler
     }
 
     private fun notifyChange(kind: PropertyKind) {
-        stateHandlers.get(kind)?.let { handlers ->
+        stateChangeListeners[kind]?.let { handlers ->
             handlers.forEach { it(this) }
         }
     }
@@ -562,7 +583,7 @@ actual open class SkiaLayer internal constructor(
         }
     }
 
-    actual internal fun draw(canvas: Canvas) {
+    internal actual fun draw(canvas: Canvas) {
         check(!isDisposed) { "SkiaLayer is disposed" }
         lockPicture {
             canvas.drawPicture(it.instance)

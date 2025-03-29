@@ -12,13 +12,12 @@
 #include "window_util.h"
 
 #include "SkColorSpace.h"
-#include "GrBackendSurface.h"
-#include "GrDirectContext.h"
+#include "ganesh/GrBackendSurface.h"
+#include "ganesh/GrDirectContext.h"
 #include "SkSurface.h"
-#include "../common/interop.hh"
 
-#include "d3d/GrD3DTypes.h"
-#include "d3d/GrD3DBackendContext.h"
+#include "ganesh/d3d/GrD3DTypes.h"
+#include "ganesh/d3d/GrD3DBackendContext.h"
 
 class DirectXOffscreenDevice
 {
@@ -150,14 +149,14 @@ extern "C"
         std::string name(tmp.begin(), tmp.end());
         jstring jname = env->NewStringUTF(name.c_str());
 
-        static jclass cls = (jclass) env->NewGlobalRef(env->FindClass("org/jetbrains/skiko/swing/Direct3DSwingRedrawer"));
+        static jclass cls = (jclass) env->NewGlobalRef(env->FindClass("org/jetbrains/skiko/graphicapi/InternalDirectXApi"));
         static jmethodID method = env->GetMethodID(cls, "isAdapterSupported", "(Ljava/lang/String;)Z");
 
         return env->CallBooleanMethod(redrawer, method, jname);
     }
 
     // TODO: extract common code with directXRedrawer
-    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_chooseAdapter(
+    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_chooseAdapter(
             JNIEnv *env, jobject redrawer, jint adapterPriority) {
         gr_cp<IDXGIFactory4> deviceFactory;
         if (!SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&deviceFactory)))) {
@@ -187,7 +186,7 @@ extern "C"
         return 0;
     }
 
-    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_createDirectXOffscreenDevice(
+    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_createDirectXOffscreenDevice(
         JNIEnv *env, jobject redrawer, jlong adapterPtr) {
 
         gr_cp<IDXGIFactory4> deviceFactory;
@@ -260,7 +259,7 @@ extern "C"
         return toJavaPointer(d3dDevice);
     }
 
-    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_makeDirectXRenderTargetOffScreen(
+    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_makeDirectXRenderTargetOffScreen(
             JNIEnv *env, jobject redrawer, jlong texturePtr) {
         DirectXOffScreenTexture *texture = fromJavaPointer<DirectXOffScreenTexture *>(texturePtr);
         ID3D12Resource* resource = texture->resource;
@@ -275,7 +274,7 @@ extern "C"
         return reinterpret_cast<jlong>(renderTarget);
     }
 
-    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_makeDirectXContext(
+    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_makeDirectXContext(
         JNIEnv *env, jobject redrawer, jlong devicePtr)
     {
         DirectXOffscreenDevice *d3dDevice = fromJavaPointer<DirectXOffscreenDevice *>(devicePtr);
@@ -283,7 +282,7 @@ extern "C"
         return toJavaPointer(GrDirectContext::MakeDirect3D(backendContext).release());
     }
 
-    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_makeDirectXTexture(
+    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_makeDirectXTexture(
         JNIEnv *env, jobject redrawer, jlong devicePtr, jlong oldTexturePtr, jint width, jint height) {
         DirectXOffscreenDevice *device = fromJavaPointer<DirectXOffscreenDevice *>(devicePtr);
         DirectXOffScreenTexture *oldTexture = fromJavaPointer<DirectXOffScreenTexture *>(oldTexturePtr);
@@ -307,15 +306,14 @@ extern "C"
         return toJavaPointer(texture);
     }
 
-    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_disposeDirectXTexture(
+    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_disposeDirectXTexture(
         JNIEnv *env, jobject redrawer, jlong texturePtr) {
         DirectXOffScreenTexture *texture = fromJavaPointer<DirectXOffScreenTexture *>(texturePtr);
         delete texture;
     }
 
-    JNIEXPORT jboolean JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_readPixels(
-            JNIEnv *env, jobject redrawer, jlong devicePtr, jlong texturePtr, jbyteArray byteArray) {
-        jbyte *bytesPtr = env->GetByteArrayElements(byteArray, nullptr);
+    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_waitForCompletion(
+            JNIEnv *env, jobject redrawer, jlong devicePtr, jlong texturePtr) {
 
         DirectXOffscreenDevice *device = fromJavaPointer<DirectXOffscreenDevice *>(devicePtr);
 
@@ -352,7 +350,7 @@ extern "C"
         dst.PlacedFootprint.Footprint.Depth = 1;
         dst.PlacedFootprint.Footprint.RowPitch = calculateRowPitch(texture->width);
 
-        D3D12_BOX srcBox = {0, 0, 0, texture->width, texture->height, 1};
+        D3D12_BOX srcBox = {0, 0, 0, static_cast<UINT>(texture->width), static_cast<UINT>(texture->height), 1};
 
         commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, &srcBox);
 
@@ -373,9 +371,16 @@ extern "C"
             fence->SetEventOnCompletion(fenceValue, fenceEvent);
             WaitForSingleObject(fenceEvent, INFINITE);
         }
+    }
+
+    JNIEXPORT jboolean JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_readPixels(
+            JNIEnv *env, jobject redrawer, jlong texturePtr, jbyteArray byteArray) {
+        jbyte *bytesPtr = env->GetByteArrayElements(byteArray, nullptr);
+
+        DirectXOffScreenTexture *texture = fromJavaPointer<DirectXOffScreenTexture *>(texturePtr);
 
         auto rangeLength = texture->readbackBufferWidth();
-        D3D12_RANGE readbackBufferRange{ 0, rangeLength };
+        D3D12_RANGE readbackBufferRange{ 0, static_cast<SIZE_T>(rangeLength) };
 
         /*
          * TODO: memcpy from unaligned texture is not supported, line by line copy is very slow,
@@ -408,13 +413,13 @@ extern "C"
         return true;
     }
 
-    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_disposeDevice(
+    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_disposeDevice(
         JNIEnv *env, jobject redrawer, jlong devicePtr) {
         DirectXOffscreenDevice *device = fromJavaPointer<DirectXOffscreenDevice *>(devicePtr);
         delete device;
     }
 
-    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_swing_Direct3DSwingRedrawer_getAlignment(
+    JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_graphicapi_InternalDirectXApi_getTextureAlignment(
             JNIEnv *env, jobject redrawer) {
         return D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
     }

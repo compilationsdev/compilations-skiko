@@ -74,7 +74,7 @@ fun SkikoProjectContext.compileNativeBridgesTask(
                     Arch.Arm64 -> arrayOf(
                         "-target", if (isUikitSim) "arm64-apple-ios-simulator" else "arm64-apple-ios",
                         "-isysroot", if (isUikitSim) iphoneSimSdk else iphoneOsSdk,
-                        "-miphoneos-version-min=12.0"
+                        if (isUikitSim) "-mios-simulator-version-min=12.0" else "-mios-version-min=12.0"
                     )
                     Arch.X64 -> arrayOf(
                         "-target", "x86_64-apple-ios-simulator",
@@ -117,7 +117,12 @@ fun SkikoProjectContext.compileNativeBridgesTask(
             OS.MacOS -> {
                 flags.set(listOf(
                     *buildType.clangFlags,
-                    *skiaPreprocessorFlags(OS.MacOS, buildType)
+                    *skiaPreprocessorFlags(OS.MacOS, buildType),
+                    when(arch) {
+                        Arch.Arm64 -> "-arch arm64"
+                        Arch.X64 -> "-arch x86_64"
+                        else -> error("Unexpected arch: $arch for $os")
+                    }
                 ))
             }
             OS.Linux -> {

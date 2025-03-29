@@ -8,8 +8,8 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
-#import "GrBackendSurface.h"
-#import "GrDirectContext.h"
+#import "ganesh/GrBackendSurface.h"
+#import "ganesh/GrDirectContext.h"
 #import "ganesh/mtl/GrMtlBackendContext.h"
 #import "ganesh/mtl/GrMtlDirectContext.h"
 #import "ganesh/mtl/GrMtlTypes.h"
@@ -115,6 +115,26 @@ static jmethodID getOnOcclusionStateChangedMethodID(JNIEnv *env, jobject redrawe
     return onOcclusionStateChanged;
 }
 
+
+static void setWindowPropertiesUnsafe(NSWindow* window, jboolean transparency) {
+    if (window == NULL) return;
+    if (transparency) {
+        window.hasShadow = NO;
+    }
+}
+
+static void setWindowProperties(NSWindow* window, jboolean transparency) {
+    if (NSThread.currentThread.isMainThread) {
+        setWindowPropertiesUnsafe(window, transparency);
+    } else {
+        // In case of OpenJDK, EDT thread != NSThread main thread
+        __weak NSWindow *weakWindow = window;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            setWindowPropertiesUnsafe(weakWindow, transparency);
+        });
+    }
+}
+
 extern "C"
 {
 
@@ -161,10 +181,7 @@ JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_redrawer_MetalRedrawer_createMe
         device.inflightSemaphore = dispatch_semaphore_create(device.layer.maximumDrawableCount);
 
         NSWindow* window = (__bridge NSWindow*) (void *) windowPtr;
-
-        if (transparency) {
-            window.hasShadow = NO;
-        }
+        setWindowProperties(window, transparency);
 
         jmethodID onOcclusionStateChanged = getOnOcclusionStateChangedMethodID(env, redrawer);
         device.occlusionObserver =
@@ -252,7 +269,6 @@ JNIEXPORT void JNICALL Java_org_jetbrains_skiko_redrawer_MetalRedrawer_disposeDe
         env->DeleteGlobalRef(device.layer.javaRef);
         [[NSNotificationCenter defaultCenter] removeObserver:device.occlusionObserver];
         [device.layer removeFromSuperlayer];
-        [CATransaction flush];
     }
 }
 
