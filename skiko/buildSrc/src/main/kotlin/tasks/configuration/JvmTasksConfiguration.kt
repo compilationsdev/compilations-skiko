@@ -24,7 +24,6 @@ import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.testing.Test
 import org.gradle.kotlin.dsl.withType
-import org.gradle.util.internal.VersionNumber
 import projectDirs
 import registerOrGetSkiaDirProvider
 import registerSkikoTask
@@ -39,8 +38,8 @@ fun SkikoProjectContext.createCompileJvmBindingsTask(
 ) = project.registerSkikoTask<CompileSkikoCppTask>("compileJvmBindings", targetOs, targetArch) {
     // Prefer 'java.home' system property to simplify overriding from Intellij.
     // When used from command-line, it is effectively equal to JAVA_HOME.
-    if (JavaVersion.current() < JavaVersion.VERSION_11) {
-        error("JDK 11+ is required, but Gradle JVM is ${JavaVersion.current()}. " +
+    if (JavaVersion.current() < JavaVersion.VERSION_17) {
+        error("JDK 17+ is required, but Gradle JVM is ${JavaVersion.current()}. " +
                 "Check JAVA_HOME (CLI) or Gradle settings (Intellij).")
     }
     val jdkHome = File(System.getProperty("java.home") ?: error("'java.home' is null"))
@@ -59,14 +58,15 @@ fun SkikoProjectContext.createCompileJvmBindingsTask(
     )
     sourceRoots.set(srcDirs)
     if (targetOs != OS.Android) includeHeadersNonRecursive(jdkHome.resolve("include"))
-    includeHeadersNonRecursive(skiaHeadersDirs(skiaJvmBindingsDir.get()))
+    val skiaDir = skiaJvmBindingsDir.get()
+    includeHeadersNonRecursive(skiaHeadersDirs(skiaDir))
     val projectDir = project.projectDir
     includeHeadersNonRecursive(projectDir.resolve("src/awtMain/cpp/include"))
     includeHeadersNonRecursive(projectDir.resolve("src/jvmMain/cpp/common"))
     includeHeadersNonRecursive(projectDir.resolve("src/jvmMain/cpp/include"))
     includeHeadersNonRecursive(projectDir.resolve("src/commonMain/cpp/common/include"))
 
-    compiler.set(compilerForTarget(targetOs, targetArch, isJvm = true))
+    compiler.set(compilerForTarget(targetOs, targetArch))
 
     val osFlags: Array<String>
     when (targetOs) {
@@ -85,6 +85,10 @@ fun SkikoProjectContext.createCompileJvmBindingsTask(
         OS.Linux -> {
             includeHeadersNonRecursive(jdkHome.resolve("include/linux"))
             includeHeadersNonRecursive(runPkgConfig("dbus-1"))
+            val archFlags = if (targetArch == Arch.Arm64) arrayOf(
+                // Always inline atomics for ARM64 to prevent linking incompatibility issues after updating GCC to 10
+                "-mno-outline-atomics",
+            ) else arrayOf()
             osFlags = arrayOf(
                 *buildType.clangFlags,
                 "-DGL_GLEXT_PROTOTYPES",
@@ -92,12 +96,16 @@ fun SkikoProjectContext.createCompileJvmBindingsTask(
                 "-fno-rtti",
                 "-fno-exceptions",
                 "-fvisibility=hidden",
-                "-fvisibility-inlines-hidden"
+                "-fvisibility-inlines-hidden",
+                *archFlags,
             )
         }
         OS.Windows -> {
             includeHeadersNonRecursive(windowsSdkPaths.includeDirs)
             includeHeadersNonRecursive(jdkHome.resolve("include/win32"))
+            includeHeadersNonRecursive(skiaDir.resolve("third_party/externals/angle2/include"))
+            includeHeadersNonRecursive(skiaDir.resolve("include/gpu"))
+            includeHeadersNonRecursive(skiaDir.resolve("src/gpu"))
             val targetArgs = if (targetArch == Arch.Arm64) arrayOf("/clang:--target=arm64-windows") else arrayOf()
             osFlags = arrayOf(
                 "/nologo",
@@ -106,10 +114,6 @@ fun SkikoProjectContext.createCompileJvmBindingsTask(
                 "/GR-", // no-RTTI.
                 "/FS", // Due to an error when building in Teamcity. https://docs.microsoft.com/en-us/cpp/build/reference/fs-force-synchronous-pdb-writes
                 *targetArgs,
-                // LATER. Angle rendering arguments:
-                // "-I$skiaDir/third_party/externals/angle2/include",
-                // "-I$skiaDir/src/gpu",
-                // "-DSK_ANGLE",
             )
         }
         OS.Android -> {
@@ -148,7 +152,7 @@ fun Project.androidClangFor(targetArch: Arch, version: String = "30"): Provider<
         OS.Windows -> "windows-x86_64"
         else -> throw GradleException("unsupported $hostOs")
     }
-    val ndkPath = project.providers
+    val ndkPathProvider = project.providers
         .environmentVariable("ANDROID_NDK_HOME")
         .orEmpty()
         .map { ndkHomeEnv ->
@@ -163,7 +167,7 @@ fun Project.androidClangFor(targetArch: Arch, version: String = "30"): Provider<
                 "$androidHome/$ndkVersion"
             }
         }
-    return ndkPath.map { ndkPath ->
+    return ndkPathProvider.map { ndkPath ->
         var clangBinaryName = "$androidArch-linux-android$version-clang++"
         if (hostOs.isWindows) {
             clangBinaryName += ".cmd"
@@ -237,7 +241,7 @@ fun SkikoProjectContext.createLinkJvmBindings(
     buildSuffix.set("jvm")
     buildTargetArch.set(targetArch)
     buildVariant.set(buildType)
-    linker.set(linkerForTarget(targetOs, targetArch, isJvm = true))
+    linker.set(linkerForTarget(targetOs, targetArch))
 
     when (targetOs) {
         OS.MacOS -> {
@@ -286,6 +290,8 @@ fun SkikoProjectContext.createLinkJvmBindings(
                 "$skiaBinDir/libskunicode_core.a",
                 "$skiaBinDir/libskunicode_icu.a",
                 "$skiaBinDir/libskshaper.a",
+                "$skiaBinDir/libjsonreader.a",
+
             )
         }
         OS.Windows -> {
@@ -309,6 +315,7 @@ fun SkikoProjectContext.createLinkJvmBindings(
                         "ole32.lib",
                         "Propsys.lib",
                         "shcore.lib",
+                        "Shlwapi.lib",
                         "user32.lib",
                     )
                 )
@@ -323,6 +330,7 @@ fun SkikoProjectContext.createLinkJvmBindings(
                 "-lEGL",
                 "-llog",
                 "-landroid",
+                "-latomic",
                 // Hack to fix problem with linker not always finding certain declarations.
                 "$skiaBinDir/libskia.a",
             )
@@ -463,7 +471,7 @@ fun SkikoProjectContext.skikoRuntimeDirForTestsTask(
     from(project.zipTree(skikoJvmJar.flatMap { it.archiveFile }))
     from(project.zipTree(skikoJvmRuntimeJar.flatMap { it.archiveFile }))
     duplicatesStrategy = DuplicatesStrategy.WARN
-    destinationDir = project.buildDir.resolve("skiko-runtime-for-tests")
+    destinationDir = project.layout.buildDirectory.dir("skiko-runtime-for-tests").get().asFile
 }
 
 fun SkikoProjectContext.skikoJarForTestsTask(
@@ -500,6 +508,7 @@ fun SkikoProjectContext.setupJvmTestTask(skikoAwtJarForTests: TaskProvider<Jar>,
             )
             systemProperty("skiko.test.ui.enabled", System.getProperty("skiko.test.ui.enabled", canRunUiTests.toString()))
             systemProperty("skiko.test.ui.renderApi", System.getProperty("skiko.test.ui.renderApi", "all"))
+            systemProperty("skiko.test.ui.renderApi.ignoreAssertsFor", System.getProperty("skiko.test.ui.renderApi.ignoreAssertsFor", "OPENGL"))
             systemProperty("skiko.test.debug", buildType == SkiaBuildType.DEBUG)
 
             // Tests should be deterministic, so disable scaling.
@@ -510,6 +519,7 @@ fun SkikoProjectContext.setupJvmTestTask(skikoAwtJarForTests: TaskProvider<Jar>,
             }
         }
 
+        classpath += files(skikoAwtRuntimeJarForTests)
         jvmArgs = listOf("--add-opens", "java.desktop/sun.font=ALL-UNNAMED")
     }
 }

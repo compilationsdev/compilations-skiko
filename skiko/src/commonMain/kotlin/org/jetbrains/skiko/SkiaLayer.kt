@@ -55,9 +55,19 @@ expect open class SkiaLayer {
     fun detach()
 
     /**
-     * Force redraw.
+     * Request redrawing of the content; The [renderDelegate] will be asked to re-render, and the result will be drawn
+     * on the screen.
+     *
+     * @param throttledToVsync Whether to throttle calling [renderDelegate]'s [SkikoRenderDelegate.onRender] to at most
+     * once between vsync signals (if vsync is enabled).
      */
-    fun needRedraw()
+    fun needRender(throttledToVsync: Boolean = true)
+
+    @Deprecated(
+        message = "Use needRender() instead",
+        replaceWith = ReplaceWith("needRender()")
+    )
+    fun needRedraw()  // TODO: Remove this sometime after 2026-07
 
     /**
      * Drawing function.

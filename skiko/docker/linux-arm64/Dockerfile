@@ -1,17 +1,14 @@
 FROM arm64v8/ubuntu:20.04
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update -y
-RUN apt-get install binutils build-essential -y
-RUN apt-get install software-properties-common -y
-RUN apt-get install python git fontconfig libfontconfig1-dev libglu1-mesa-dev libxrandr-dev libdbus-1-dev curl wget -y
-RUN apt-get install openjdk-11-jdk -y
-RUN apt-get install clang-11 -y && \
-    apt-get remove g++ -y && \
-    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-11 100 && \
-    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-11 100
-RUN apt-get install nodejs -y
 
-# Install libs & tools
+RUN apt update -y && \
+    apt install binutils build-essential software-properties-common -y && \
+    apt install zip unzip git python curl wget xvfb -y && \
+    apt install fontconfig libfontconfig1-dev libglu1-mesa-dev libxrandr-dev libdbus-1-dev -y && \
+    apt install openjdk-21-jdk -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install chromium tools
 ENV DEPOT_TOOLS=/usr/depot_tools
 ENV PATH=$DEPOT_TOOLS:$PATH
 RUN git clone 'https://chromium.googlesource.com/chromium/tools/depot_tools.git' $DEPOT_TOOLS

@@ -4,8 +4,6 @@ import kotlinx.cinterop.useContents
 import org.jetbrains.skia.Canvas
 import org.jetbrains.skia.PixelGeometry
 import org.jetbrains.skia.Surface
-import platform.UIKit.*
-import kotlin.system.getTimeNanos
 
 actual open class SkiaLayer {
     internal var needRedrawCallback: () -> Unit = {}
@@ -25,9 +23,15 @@ actual open class SkiaLayer {
         get() = false
         set(_) { throw UnsupportedOperationException() }
 
-    actual fun needRedraw() {
+    actual fun needRender(throttledToVsync: Boolean) {
         needRedrawCallback.invoke()
     }
+
+    @Deprecated(
+        message = "Use needRender() instead",
+        replaceWith = ReplaceWith("needRender()")
+    )
+    actual fun needRedraw() = needRender()
 
     actual val component: Any?
         get() = this.view
@@ -63,7 +67,7 @@ actual open class SkiaLayer {
     }
 
     internal fun draw(surface: Surface) {
-        renderDelegate?.onRender(surface.canvas, surface.width, surface.height, getTimeNanos())
+        renderDelegate?.onRender(surface.canvas, surface.width, surface.height, currentNanoTime())
     }
 
     actual val pixelGeometry: PixelGeometry
